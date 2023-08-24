@@ -7,6 +7,7 @@ import {DeployDSC} from "../../../script/DeployDSC.s.sol";
 import {DSCEngine} from "../../../src/DSCEngine.sol";
 import {HelperConfig} from "../../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/ERC20Mock.sol";
+import {MockV3Aggregator} from "test/mock/ MockV3Aggregator.sol";
 
 contract DSCEngineTest is Test {
     DeployDSC deployer;
@@ -17,9 +18,11 @@ contract DSCEngineTest is Test {
     address wbtcPriceFeed;
     address weth;
     address public USER = makeAddr("user");
+    address public LIQUIDATOR = makeAddr("liquidator");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
     uint256 public constant AMOUNT_TO_MINT = 100 ether;
+    uint256 public constant COLLATERAL_TO_COVER = 20 ether;
 
     function setUp() external {
         deployer = new DeployDSC();
@@ -130,5 +133,29 @@ contract DSCEngineTest is Test {
 
         uint256 userBalance = dsc.balanceOf(USER);
         assertEq(userBalance, 0);
+    }
+
+    function testProperlyReportedHealthFactor() public DepositeCollateralAndMintedDsc {
+        uint256 expectedHealthFactor = 100 ether;
+        uint256 actualHealthFactor = dsce.getHealthFactor(USER);
+        assertEq(expectedHealthFactor, actualHealthFactor);
+    }
+
+    function testHealthFactorCanGoBelowOne() public DepositeCollateralAndMintedDsc {
+        int256 ethUsdUpdatedPrice = 18e8;
+        MockV3Aggregator(wethPriceFeed).updateAnswer(ethUsdUpdatedPrice);
+        uint256 userHealthFactor = dsce.getHealthFactor(USER);
+        assert(userHealthFactor == 0.9 ether);
+    }
+
+    function testCantLiquidateGoodHealthFactor() public DepositeCollateralAndMintedDsc {
+        ERC20Mock(weth).mint(LIQUIDATOR, COLLATERAL_TO_COVER);
+        vm.startPrank(LIQUIDATOR);
+        ERC20Mock(weth).approve(address(dsce), COLLATERAL_TO_COVER);
+        dsce.depositCollateralAndMintDsc(weth, COLLATERAL_TO_COVER, AMOUNT_TO_MINT);
+        dsc.approve(address(dsce), AMOUNT_TO_MINT);
+        vm.expectRevert(DSCEngine.DSCEngine__HealthFactorOk.selector);
+        dsce.liquidate(weth, USER, AMOUNT_TO_MINT);
+        vm.stopPrank();
     }
 }
